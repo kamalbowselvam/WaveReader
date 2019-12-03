@@ -139,43 +139,19 @@ class WaveReader:
                 print('The data starts at {}'.format(self.data_start))
                 print('The data ends at {}'.format(self.data_chunk_size))
 
-
-    def get_all_data(self):
-        self.fid.seek(0, os.SEEK_SET)
-        dat_1 = np.memmap(self.fid, dtype='<i2', mode='c', offset=42, shape=(self.data_chunk_size//2,))
-        print(len(dat_1))
-        n = np.ceil(dat_1.size / 10)
-        from scipy.interpolate import interp1d
-        f = interp1d(np.linspace(0, 1, dat_1.size), dat_1, 'linear')
-        return f(np.linspace(0, 1, n))
-
     def get_next_data(self,chunk_size):
         self.fid.seek(0, os.SEEK_SET)
         start = self.data_start
         size = self.data_chunk_size
         end = start + chunk_size
         t_start = 0
-        outputstr = []
         while start+chunk_size < size:
             data = numpy.memmap(self.fid, dtype='<i2', mode='c', offset=start, shape=(chunk_size // 2,))
-            n = np.ceil(data.size / 10)
-            from scipy.interpolate import interp1d
             datax= np.linspace(t_start, t_start + len(data), len(data), endpoint=False)
-            import matplotlib.pyplot as plt
-
             f = signal.resample(data, int(len(data)/100))
             xnew = np.linspace(t_start, t_start + len(data), int(len(data)/100), endpoint=False)
-
-
-            #print(t_start)
             f[0] = data[0]
             f[-1] = data[-1]
-            #plt.plot(datax,data)
-            #plt.plot(xnew,f)
-            #plt.show()
-
-            print(datax[0],datax[-1],xnew[0],xnew[-1])
-
             self.global_data_y.extend(f)
             self.global_data_x.extend(xnew)
             self.fid.seek(end)
@@ -183,7 +159,6 @@ class WaveReader:
             start = start + int(chunk_size)
             end = start + int(chunk_size)
             yield data
-
 
     def get_patch_data(self,start,chunk_size,y_start):
         self.fid.seek(0, os.SEEK_SET)
@@ -193,53 +168,61 @@ class WaveReader:
         self.fid.seek(end)
         return datax,datay
 
-
     def get_header(self):
         return self.sampling_rate, self.data_chunk_size/(2*self.sampling_rate), self.data_chunk_size
 
-    """
-    def print_data(self):
-        self.fid.seek(0, os.SEEK_SET)
-        self.fid.seek(44)
-        cursor_pos = self.data_start
-        while cursor_pos < self.data_chunk_size:
-            val = struct.unpack('<h', self.fid.read(2))[0]
-            #print(val)
-            #print(int.from_bytes(val, byteorder='big'))
-            break
-    """
     def log_specgram(self,audio, sample_rate, window_size=1, step_size=10, eps=1e-10):
-        # f, t, spec = signal.spectrogram(audio, fs=sample_rate,window='hann', nperseg=nperseg, noverlap=noverlap,detrend=False,scaling='spectrum',mode='magnitude')
         f, t, spec = signal.spectrogram(audio, fs=sample_rate, window='hann', nperseg=window_size, noverlap=50, scaling='spectrum', mode='magnitude')
         return 80 + 20 * np.log10((spec.T.astype(np.float32) + eps) / np.max(spec)), f, t
 
-
-
-    def get_sepctrogram(self,global_chunk):
+    def get_sepctrogram(self,global_chunk,mode):
         fs, tim, total_samples = self.get_header()
-
-
         self.global_chunk = global_chunk
         self.local_chunk = int(self.global_chunk / 10)
         data = self.get_next_data(self.global_chunk)
         freq = np.linspace(0, fs / 2, int(self.local_chunk / 2) +1)
         timeline = np.linspace(0, tim, int(total_samples / self.global_chunk))
-        img_array = np.zeros((int(self.local_chunk / 2) + int(1), int((total_samples/self.global_chunk)/2)),dtype=np.dtype(np.int8))
 
-
+        #if mode == "high":
+        #    img_array = np.zeros(int(self.local_chunk / 2) + int(1), dtype=np.dtype(np.int8))
+        #if mode == "low":
+        #    img_array = np.zeros((int(self.local_chunk / 2) + int(1), int((total_samples/self.global_chunk)/2)),dtype=np.dtype(np.int8))
         i = 0
         for chunk in data:
             spec, f, t = self.log_specgram(audio=chunk, sample_rate=fs, window_size=self.local_chunk)
+            print(len(spec))
             try:
-                img_array[:, i] = np.average(spec, axis=0)
+
+             if mode == "low":
+                 if i == 0:
+                    res = np.average(spec, axis=0)
+                    img_array = res
+
+                 elif i == 1:
+                     val = np.average(spec, axis=0)
+                     img_array = np.stack((img_array, val))
+                     img_array = img_array.T
+                 else:
+                    val = np.average(spec, axis=0)
+                    img_array = np.stack((img_array,val.T))
+
+             elif mode == "high":
+                 if i == 0:
+                     img_array = spec.T
+                 else:
+                     img_array = np.hstack((img_array,spec.T))
+
+
             except:
-                pass
+                import traceback
+                print(traceback.print_exc())
+            print(i)
+
             i = i + 1
-            print(len(chunk))
         return img_array,freq,timeline
 
 
-    def get_data(self):
+    def get_lltb(self):
         start = 44
         chunk = 2
         start_y = 0
@@ -301,7 +284,6 @@ class WaveReader:
         edatax, edatay = reader.get_patch_data(end_byte, 2, (reader.data_chunk_size//2)-1)
         end = reader.data_chunk_size
         sampled.append([edatax[0],edatay[0]])
-        print(edatax[0],edatay[0])
         return sampled
 
 
@@ -312,8 +294,8 @@ if __name__ == "__main__":
    from scipy.io import wavfile
    fs,data= wavfile.read("Digital-Seashore.wav")
    print(data)
-   img_array,f,t = reader.get_sepctrogram(global_chunk=20480)
-   x = [  ((x / 48000) / 60) for x in reader.global_data_x]
+   img_array,f,t = reader.get_sepctrogram(global_chunk=20480,mode="low")
+   x = [ ((x / 48000) / 60) for x in reader.global_data_x]
    plt.plot(x,reader.global_data_y)
    plt.show()
    #x, y = zip(*sampled)
@@ -322,10 +304,10 @@ if __name__ == "__main__":
    #print(len(x),len(data))
    #plt.show()
 
-   #plt.figure(figsize=(20,5))
-   #plt.pcolormesh(img_array,cmap="jet")
-   #plt.colorbar()
-   #plt.show()
+   plt.figure(figsize=(20,5))
+   plt.pcolormesh(img_array,cmap="jet")
+   plt.colorbar()
+   plt.show()
 
    #f, t, Sxx = signal.spectrogram(data, fs=fs, window='hann', nperseg=512,noverlap=50, scaling='spectrum', mode='magnitude')
    #eps = 1e-10
